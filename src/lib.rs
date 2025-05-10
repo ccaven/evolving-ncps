@@ -1,367 +1,276 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    ops::Deref,
-};
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy)]
-pub struct NeuronConfig {
-    pub leakage_conductance: f32,
-    pub membrane_capacitance: f32,
-    pub resting_potential: f32,
+pub mod data;
+pub mod traits;
+
+use crate::traits::{Gene, Genome, Evaluated};
+
+
+struct PopulationConfig {
+    pub population_size: u32,
+    pub fitness_criterion: f32,
+    pub fitness_threshold: f32
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct SynapseConfig {
-    pub weight: f32,
-    pub reversal_potential: f32,
-    pub sigma: f32,
-    pub mu: f32,
-    // Enabled flag is for the genetic algorithm
-    pub enabled: bool,
+struct NetworkGenomeConfig {
+    pub num_inputs: u32,
+    pub num_outputs: u32,
+    pub num_units: u32,
+    pub default_sparsity: f32,
+
+    pub compatibility_disjoint_coefficient: f32,
+    pub compatibility_weight_coefficient: f32,
+
+    pub conn_add_prob: f32,
+    pub conn_delete_prob: f32,
+ 
+    pub node_add_prob: f32,
+    pub node_delete_prob: f32,
+ 
+    pub enabled_mutate_rate: f32,
+    pub polarity_mutate_rate: f32
 }
 
-pub struct Neuron {
-    pub state: f32,
-    pub config: NeuronConfig,
-}
+#[derive(Clone)]
+struct NeuronGene {}
 
-pub struct NetworkConfig {
-    pub neurons: BTreeMap<u32, NeuronConfig>,
-
-    // First key is destination neuron, second key is source neuron
-    pub synapses: BTreeMap<u32, BTreeMap<u32, SynapseConfig>>,
-}
-
-impl NetworkConfig {
-    /// Compute the genetic distance between two individuals.
-    /// This is used by the speciation mechanism of NEAT.
-    pub fn genetic_distance(&self, other: &Self) -> f32 {
-        // Match and accumulate distance between genes associated with neurons
-        let neuron_distance = {
-            let mut neuron_distance = 0f32;
-
-            let mut other_remaining_ids: BTreeSet<u32> = other.neurons.keys().cloned().collect();
-
-            for (self_neuron_id, self_neuron_config) in self.neurons.iter() {
-                if let Some(other_neuron_config) = other.neurons.get(self_neuron_id) {
-                    neuron_distance +=
-                        distance_between_neurons(self_neuron_config, other_neuron_config);
-                    other_remaining_ids.remove(self_neuron_id);
-                } else {
-                    neuron_distance += distance_between_neuron_and_none(self_neuron_config);
-                }
-            }
-
-            for other_neuron_id in other_remaining_ids {
-                if let Some(other_neuron_config) = other.neurons.get(&other_neuron_id) {
-                    neuron_distance += distance_between_neuron_and_none(other_neuron_config);
-                }
-            }
-
-            neuron_distance
-        };
-
-        // Match and accumulate distance between genes associated with synapses
-        let synapse_distance = {
-            let mut synapse_distance = 0f32;
-
-            let mut remaining_src_ids: BTreeSet<u32> = other.synapses.keys().cloned().collect();
-
-            for (self_src_id, self_dst_map) in self.synapses.iter() {
-                if let Some(other_dst_map) = other.synapses.get(self_src_id) {
-                    let mut remaining_dst_ids: BTreeSet<u32> =
-                        other_dst_map.keys().cloned().collect();
-
-                    for (self_dst_id, self_synapse_config) in self_dst_map {
-                        if let Some(other_synapse_config) = other_dst_map.get(self_dst_id) {
-                            // Case 1: the same synapse exists in both individuals
-                            synapse_distance += distance_between_synapses(
-                                self_synapse_config,
-                                other_synapse_config,
-                            );
-                            remaining_dst_ids.remove(self_dst_id);
-                        } else {
-                            // Case 2: src is same, dst does not exist in other
-                            synapse_distance +=
-                                distance_between_synapse_and_none(self_synapse_config);
-                        }
-                    }
-
-                    // Case 3: src is the same, dst does not exist in self
-                    for other_dst_id in remaining_dst_ids {
-                        if let Some(other_synapse_config) = other_dst_map.get(&other_dst_id) {
-                            synapse_distance +=
-                                distance_between_synapse_and_none(other_synapse_config)
-                        }
-                    }
-
-                    remaining_src_ids.remove(self_src_id);
-                } else {
-                    for (_, self_synapse_config) in self_dst_map {
-                        // Case 4: src does not exist in other
-                        synapse_distance += distance_between_synapse_and_none(self_synapse_config);
-                    }
-                }
-            }
-
-            for other_src_id in remaining_src_ids {
-                if let Some(other_dst_map) = other.synapses.get(&other_src_id) {
-                    for (_, other_synapse_config) in other_dst_map {
-                        // Case 5: src does not exist in self
-                        synapse_distance += distance_between_synapse_and_none(other_synapse_config);
-                    }
-                }
-            }
-
-            synapse_distance
-        };
-
-        neuron_distance + synapse_distance
+impl Gene<NetworkGenomeConfig> for NeuronGene {
+    fn mutate(self, _config: &NetworkGenomeConfig) -> Self {
+        self
     }
 
-    /// Perform the mutation mechanism of the genetic algorithm.
-    /// There are a few cases to consider:
-    /// 1.
-    pub fn mutation(&self) -> Self {
-        todo!()
+    fn crossover(&self, _other: &Self, _config: &NetworkGenomeConfig) -> Self {
+        NeuronGene {  }
     }
 
-    pub fn crossover(&self, other: &Self) -> Self {
-        todo!()
+    fn distance(&self, _other: &Self, _config: &NetworkGenomeConfig) -> f32 {
+        0.0
     }
 }
 
-pub struct Network {
-    pub config: NetworkConfig,
-    pub neurons: BTreeMap<u32, Neuron>,
+#[derive(Clone)]
+struct SynapseGene {
+    pub polarity: bool,
+    pub enabled: bool
 }
 
-impl Network {
-    const ODE_UNFOLDS: usize = 16;
+impl Gene<NetworkGenomeConfig> for SynapseGene {
+    fn mutate(self, config: &NetworkGenomeConfig) -> Self {
+        Self { 
+            polarity: rand::random_bool(config.polarity_mutate_rate.into()) ^ self.polarity,
+            enabled: rand::random_bool(config.enabled_mutate_rate.into()) ^ self.enabled
+        }
+    }
 
-    pub fn new(config: NetworkConfig) -> Self {
-        let neurons: BTreeMap<u32, Neuron> = config
-            .neurons
-            .iter()
-            .map(|(id, config)| {
-                (
-                    // This will be the key in the collected map
-                    *id,
-                    // This will be the value in the collected map
-                    // In "Neural circuit policies enabling auditable autonomy",
-                    // neuron states are initialized with zeros.
-                    Neuron {
-                        state: 0f32,
-                        config: *config,
-                    },
-                )
-            })
+    fn crossover(&self, other: &Self, _config: &NetworkGenomeConfig) -> Self {
+        SynapseGene { 
+            polarity: if rand::random_bool(0.5) { self.polarity } else { other.polarity }, 
+            enabled: if rand::random_bool(0.5) { self.enabled } else { other.enabled } 
+        }
+    }
+
+    fn distance(&self, other: &Self, config: &NetworkGenomeConfig) -> f32 {
+        return (
+            if self.polarity == other.polarity { 0.0 } else { 1.0 } +
+            if self.enabled == other.enabled { 0.0 } else { 1.0 }
+        ) * config.compatibility_weight_coefficient;
+    }
+}
+
+struct NetworkGenome {
+    pub connections: HashMap<(i32, i32), SynapseGene>,
+    pub nodes: HashMap<i32, NeuronGene>
+}
+
+impl Genome<NetworkGenomeConfig> for NetworkGenome {
+    fn crossover(a: Evaluated<Self>, b: Evaluated<Self>, config: &NetworkGenomeConfig) -> Self {
+        // Destructure and order such that a > b
+        let (
+            Evaluated {
+                genome: a, 
+                ..
+            },
+            Evaluated {
+                genome: b, 
+                ..
+            }
+        ) = if a.fitness > b.fitness { (a, b) } else { (b, a) };
+
+        let mut connections = HashMap::<(i32, i32), SynapseGene>::new();
+        let mut nodes = HashMap::<i32, NeuronGene>::new();
+
+        for key in a.connections.keys() {
+            if b.connections.contains_key(key) {
+                let new_gene = a.connections[key].crossover(&b.connections[key], config);
+                connections.insert(*key, new_gene);
+            } else {
+                connections.insert(*key, a.connections[key].clone());
+            }
+        }
+
+        for key in a.nodes.keys() {
+            if b.nodes.contains_key(key) {
+                let new_gene = a.nodes[key].crossover(&b.nodes[key], config);
+                nodes.insert(*key, new_gene);
+            } else {
+                nodes.insert(*key, a.nodes[key].clone());
+            }
+        }
+
+        Self { connections, nodes }
+    }
+
+    fn mutate(self, config: &NetworkGenomeConfig) -> Self {
+        let NetworkGenome { mut connections, mut nodes } = self;
+
+        // Handle possibly adding or removing nodes
+        if rand::random::<f32>() < config.node_add_prob {
+            let candidates: Vec<(i32, i32)> = connections.keys().map(|x| *x).collect();
+
+            if candidates.len() > 0 {
+                let (input_id, output_id) = candidates[rand::random_range(0..candidates.len())];
+
+                let new_id = {
+                    let mut candidate_id = rand::random::<u32>();
+                    while candidate_id < config.num_outputs || nodes.contains_key(&(candidate_id as i32)) {
+                        candidate_id = rand::random::<u32>();
+                    }
+                    candidate_id
+                } as i32;
+
+                let old_polarity = connections[&(input_id, output_id)].polarity;
+
+                connections.entry((input_id, output_id)).and_modify(|x| x.enabled = false);
+
+                nodes.insert(new_id, NeuronGene {});
+
+                connections.insert((input_id, new_id), SynapseGene { 
+                    polarity: old_polarity, 
+                    enabled: true
+                });
+
+                connections.insert((new_id, output_id), SynapseGene { 
+                    polarity: old_polarity, 
+                    enabled: true
+                });
+            }
+        }
+
+        if rand::random::<f32>() < config.node_delete_prob {
+            let candidates: Vec<i32> = nodes.keys().filter(|key| **key < config.num_outputs as i32).map(|x| *x).collect();
+
+            if candidates.len() > 0 {
+                let del_key = candidates[rand::random_range(0..candidates.len())];
+
+                let mut bad_keys = Vec::new();
+            
+                for key in connections.keys() {
+                    if key.0 == del_key || key.1 == del_key {
+                        bad_keys.push(*key);
+                    }
+                }
+                
+                for key in bad_keys {
+                    connections.remove(&key);
+                }
+
+                nodes.remove(&del_key);
+            }
+        }
+
+        if rand::random::<f32>() < config.conn_add_prob {
+            let output_candidates: Vec<i32> = nodes.keys().map(|x| *x as i32).collect();
+            
+            let mut input_candidates: Vec<i32> = output_candidates.clone();
+
+            for i in 0..config.num_inputs {
+                let input_id = -1 - (i as i32);
+                input_candidates.push(input_id);
+            }
+
+            let input_key = input_candidates[rand::random_range(0..input_candidates.len())];
+            let output_key = output_candidates[rand::random_range(0..output_candidates.len())];
+
+            connections.insert((input_key, output_key), SynapseGene { 
+                polarity: rand::random_bool(0.5), 
+                enabled: true 
+            });
+        }
+
+        if rand::random::<f32>() < config.conn_delete_prob {
+            let candidates: Vec<(i32, i32)> = connections.keys().map(|x| *x).collect();
+            
+            if candidates.len() > 0 {
+                let (input_id, output_id) = candidates[rand::random_range(0..candidates.len())];
+                connections.remove(&(input_id, output_id));
+            }
+        }
+
+        // Mutate inplace
+        let connections = connections
+            .into_iter()
+            .map(|(key, val)| (key, val.mutate(config)))
             .collect();
-
-        Network { config, neurons }
-    }
-
-    /// Evaluates one fractional timestep of size t.
-    /// See equation (3) in https://www.nature.com/articles/s42256-020-00237-3
-    fn one_step(&mut self, t: f32) {
-        // Bucket to hold computed values
-        let mut next_states = BTreeMap::new();
-
-        for (id, neuron) in self.neurons.iter() {
-            let state = neuron.state;
-            let config = neuron.config;
-
-            // Collect incoming synapses (if any)
-            let Some(incoming_synapses) = self.config.synapses.get(id) else {
-                continue;
-            };
-
-            // Compute effects of sensory neurons
-            let (sensory_numerator, sensory_denominator) = incoming_synapses
-                .iter()
-                // There is a shared term
-                .filter_map(|(src_id, synapse)| {
-                    if !synapse.enabled {
-                        None
-                    } else {
-                        // If src_id does not exist, return None
-                        // otherwise, compute the incoming activation value
-                        self.neurons.get(src_id).map(|n| {
-                            (
-                                synapse.weight * sigmoid(n.state, synapse.mu, synapse.sigma),
-                                // Keep track of the reversal potentials for the next step
-                                synapse.reversal_potential,
-                            )
-                        })
-                    }
-                })
-                // Compute the numerator and denominator simultaneously
-                .fold(
-                    (0f32, 0f32),
-                    |(running_numerator, running_denominator),
-                     (synapse_value, reversal_potential)| {
-                        (
-                            running_numerator + synapse_value * reversal_potential,
-                            running_denominator + synapse_value,
-                        )
-                    },
-                );
-
-            // Run single semi-implicit Euler step
-            let numerator = state * config.membrane_capacitance / t
-                + config.leakage_conductance * config.resting_potential * sensory_numerator;
-
-            let denominator =
-                config.membrane_capacitance / t + config.leakage_conductance + sensory_denominator;
-
-            let next_state = numerator / denominator;
-
-            next_states.insert(*id, next_state);
-        }
-
-        // Update all neurons with next state
-        for (id, next_state) in next_states {
-            self.neurons.entry(id).and_modify(|n| n.state = next_state);
+        
+        let nodes = nodes
+            .into_iter()
+            .map(|(key, val)| (key, val.mutate(config)))
+            .collect();
+        
+        Self {
+            connections,
+            nodes
         }
     }
 
-    pub fn step(&mut self, activations: BTreeMap<u32, f32>) {
-        let t: f32 = 1.0f32 / (Self::ODE_UNFOLDS as f32);
+    fn distance(&self, other: Self, config: &NetworkGenomeConfig) -> f32 {
+        let node_distance = {
+            let self_node_keys = self.nodes.keys().map(|x| *x).collect::<HashSet<i32>>();
+            let other_node_keys = other.nodes.keys().map(|x| *x).collect::<HashSet<i32>>();
 
-        // Run semi-implicit Euler to solve system of differential equations
-        for _ in 0..Self::ODE_UNFOLDS {
-            // Treat activation as a change over one full unit of time
-            for (id, activation) in activations.iter() {
-                self.neurons
-                    .entry(*id)
-                    .and_modify(|n| n.state += activation * t);
+            let shared_keys = self_node_keys.intersection(&other_node_keys);
+            let disjoint_keys = self_node_keys.symmetric_difference(&other_node_keys);
+
+            let max_nodes = usize::max(self_node_keys.len(), other_node_keys.len());
+
+            if max_nodes == 0 {
+                0.0
+            } else {
+                (
+                    shared_keys
+                        .map(|x| self.nodes[x].distance(&other.nodes[x], config))
+                        .sum::<f32>() +
+                    (disjoint_keys.count() as f32) * config.compatibility_disjoint_coefficient
+                ) / (max_nodes as f32)
             }
-
-            self.one_step(t);
-        }
-    }
-}
-
-/// Compute an offset and scaled sigmoid function.
-fn sigmoid(x: f32, mu: f32, sigma: f32) -> f32 {
-    let x = (mu - x) * sigma;
-    let x = x.exp();
-    x / (1f32 + x)
-}
-
-fn distance_between_neurons(a: &NeuronConfig, b: &NeuronConfig) -> f32 {
-    todo!()
-}
-
-fn distance_between_neuron_and_none(a: &NeuronConfig) -> f32 {
-    todo!()
-}
-
-fn distance_between_synapses(a: &SynapseConfig, b: &SynapseConfig) -> f32 {
-    todo!()
-}
-
-fn distance_between_synapse_and_none(a: &SynapseConfig) -> f32 {
-    todo!()
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{Network, NetworkConfig, NeuronConfig, SynapseConfig};
-
-    #[test]
-    fn test_network() {
-        let config: NetworkConfig = NetworkConfig {
-            neurons: [
-                (
-                    0u32,
-                    NeuronConfig {
-                        leakage_conductance: 1.0,
-                        membrane_capacitance: 0.6,
-                        resting_potential: 1.0,
-                    },
-                ),
-                (
-                    1u32,
-                    NeuronConfig {
-                        leakage_conductance: 1.0,
-                        membrane_capacitance: 0.6,
-                        resting_potential: 1.0,
-                    },
-                ),
-                (
-                    2u32,
-                    NeuronConfig {
-                        leakage_conductance: 1.0,
-                        membrane_capacitance: 0.6,
-                        resting_potential: 1.0,
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            synapses: [
-                (
-                    0u32,
-                    [(
-                        2u32,
-                        SynapseConfig {
-                            weight: 1.0,
-                            reversal_potential: 1.0,
-                            sigma: 3.0,
-                            mu: 0.3,
-                            enabled: true,
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-                (
-                    1u32,
-                    [(
-                        0u32,
-                        SynapseConfig {
-                            weight: 1.0,
-                            reversal_potential: 2.0,
-                            sigma: 3.0,
-                            mu: 0.3,
-                            enabled: true,
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-                (
-                    2u32,
-                    [(
-                        1u32,
-                        SynapseConfig {
-                            weight: 1.0,
-                            reversal_potential: -0.3,
-                            sigma: 3.0,
-                            mu: 0.3,
-                            enabled: true,
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
         };
 
-        let mut network = Network::new(config);
+        let conn_distance = {
+            let self_conn_keys = self.connections.keys().map(|x| *x).collect::<HashSet<(i32, i32)>>();
+            let other_conn_keys = other.connections.keys().map(|x| *x).collect::<HashSet<(i32, i32)>>();
+            
+            let shared_keys = self_conn_keys.intersection(&other_conn_keys);
+            let disjoint_keys = self_conn_keys.symmetric_difference(&other_conn_keys);
 
-        for i in 0..50 {
-            network.step([(0u32, (i as f32 * 0.1).sin().abs())].into_iter().collect());
+            let max_conns = usize::max(self_conn_keys.len(), other_conn_keys.len());
 
-            println!(
-                "{:.4} -> {:.4} -> {:.4}",
-                network.neurons.get(&0).map(|n| n.state).unwrap(),
-                network.neurons.get(&1).map(|n| n.state).unwrap(),
-                network.neurons.get(&2).map(|n| n.state).unwrap(),
-            );
-        }
+            if max_conns == 0 {
+                0.0
+            } else {
+                (
+                    shared_keys
+                        .map(|x| self.connections[x].distance(&other.connections[x], config))
+                        .sum::<f32>() +
+                    (disjoint_keys.count() as f32) * config.compatibility_disjoint_coefficient
+                ) / (max_conns as f32)
+            }
+        };
+
+        return node_distance + conn_distance;
+    }
+
+    fn descriptor(&self, _config: &NetworkGenomeConfig) -> String {
+        return format!("({}, {})", self.nodes.len(), self.connections.len());
     }
 }
+
